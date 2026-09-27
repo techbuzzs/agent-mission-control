@@ -1,0 +1,19 @@
+logging { level = "info" format = "logfmt" }
+otelcol.receiver.otlp "mission_control" {
+  grpc { endpoint = "0.0.0.0:4317" }
+  http { endpoint = "0.0.0.0:4318" }
+  output { traces = [otelcol.processor.batch.traces.input] logs = [otelcol.processor.batch.logs.input] }
+}
+otelcol.processor.batch "traces" { output { traces = [otelcol.exporter.otlp.tempo.input, otelcol.connector.spanlogs.default.input] } }
+otelcol.exporter.otlp "tempo" { client { endpoint = "tempo:4317" tls { insecure = true } } }
+otelcol.connector.spanlogs "default" { spans = true roots = true output { logs = [otelcol.processor.batch.logs.input] } }
+otelcol.processor.batch "logs" { output { logs = [otelcol.exporter.loki.default.input] } }
+otelcol.exporter.loki "default" { forward_to = [loki.write.default.receiver] }
+loki.write "default" { endpoint { url = "http://loki:3100/loki/api/v1/push" } }
+prometheus.scrape "mission_control" {
+  targets = [{ "__address__" = "app:3000", "job" = "agent-mission-control" }]
+  metrics_path = "/api/metrics"
+  scrape_interval = "15s"
+  forward_to = [prometheus.remote_write.mimir.receiver]
+}
+prometheus.remote_write "mimir" { endpoint { url = "http://mimir:9009/api/v1/push" } }

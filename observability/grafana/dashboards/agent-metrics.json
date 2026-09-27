@@ -1,0 +1,16 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    { "type": "stat", "title": "Mission runs", "datasource": { "type": "prometheus", "uid": "mimir" }, "targets": [{ "expr": "mission_runs_total", "refId": "A" }], "gridPos": { "h": 7, "w": 6, "x": 0, "y": 0 } },
+    { "type": "stat", "title": "Input tokens", "datasource": { "type": "prometheus", "uid": "mimir" }, "targets": [{ "expr": "llm_input_tokens_total", "refId": "A" }], "gridPos": { "h": 7, "w": 6, "x": 6, "y": 0 } },
+    { "type": "stat", "title": "Output tokens", "datasource": { "type": "prometheus", "uid": "mimir" }, "targets": [{ "expr": "llm_output_tokens_total", "refId": "A" }], "gridPos": { "h": 7, "w": 6, "x": 12, "y": 0 } },
+    { "type": "gauge", "title": "Quality", "datasource": { "type": "prometheus", "uid": "mimir" }, "targets": [{ "expr": "mission_quality_score_average", "refId": "A" }], "fieldConfig": { "defaults": { "min": 0, "max": 100 } }, "gridPos": { "h": 7, "w": 6, "x": 18, "y": 0 } },
+    { "type": "timeseries", "title": "Telemetry availability", "datasource": { "type": "prometheus", "uid": "mimir" }, "targets": [{ "expr": "up{job=\"agent-mission-control\"}", "refId": "A" }], "gridPos": { "h": 11, "w": 24, "x": 0, "y": 7 } }
+  ],
+  "schemaVersion": 41,
+  "tags": ["agents", "metrics"],
+  "time": { "from": "now-6h", "to": "now" },
+  "title": "Agent metrics",
+  "uid": "agent-metrics"
+}

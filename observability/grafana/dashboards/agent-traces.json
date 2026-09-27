@@ -1,0 +1,12 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    { "type": "traces", "title": "Mission and LLM traces", "datasource": { "type": "tempo", "uid": "tempo" }, "targets": [{ "query": "{ resource.service.name = \"agent-mission-control\" }", "queryType": "traceql", "refId": "A" }], "gridPos": { "h": 18, "w": 24, "x": 0, "y": 0 } }
+  ],
+  "schemaVersion": 41,
+  "tags": ["agents", "tracing"],
+  "time": { "from": "now-6h", "to": "now" },
+  "title": "Agent traces",
+  "uid": "agent-traces"
+}
