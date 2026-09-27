@@ -53,8 +53,9 @@ export async function POST(request: Request) {
   try {
     let workspaceId: string | null = null;
     if (admin) {
-      const { data: existing } = await admin.from("workspaces").select("id").eq("slug", "ai-data-briefing").maybeSingle();
-      workspaceId = existing?.id ?? null;
+      const { data: existingRows, error: existingError } = await admin.from("workspaces").select("id").eq("slug", "ai-data-briefing").limit(1);
+      if (existingError) throw new Error(`Supabase workspace lookup failed: ${existingError.message}`);
+      workspaceId = existingRows?.[0]?.id ?? null;
       if (!workspaceId) {
         const { data, error } = await admin.from("workspaces").insert({ name: "AI & Data Briefing", slug: "ai-data-briefing" }).select("id").single();
         if (error) throw new Error(`Supabase workspace setup failed: ${error.message}`);

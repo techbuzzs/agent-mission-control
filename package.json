@@ -8,6 +8,7 @@
   "scripts": {
     "install:ci": "node scripts/install-ci.mjs",
     "dev": "node scripts/run-framework.mjs dev",
+    "dev:node": "next dev -p 5173",
     "build": "node scripts/run-framework.mjs build",
     "build:next": "next build",
     "start:next": "next start -H 0.0.0.0 -p 3000",
