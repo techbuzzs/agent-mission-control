@@ -81,3 +81,19 @@ The database stores source and article metadata, a short feed-provided excerpt, 
 ## 8. Production direction on Oracle Cloud
 
 Start with one Oracle Linux VM running the application and the LGTM containers behind HTTPS, with persistent block volumes and backups. Keep Supabase hosted initially. For higher availability, separate the application from telemetry storage, use OCI Object Storage for Loki/Tempo/Mimir-compatible object storage, and put secrets in OCI Vault. Do not expose OTLP, Loki, Tempo, or Mimir ingestion ports publicly.
+# Debugging a local run
+
+The app has a Node.js backend, not a Python backend. To run it in a separate visible PowerShell window with server lifecycle/error logs, use:
+
+```powershell
+cd E:\Work\codex\agent-mission-control
+$env:DEBUG_MISSION_CONTROL = "1"
+$env:NODE_OPTIONS = "--trace-warnings"
+npm run dev
+```
+
+Then run a briefing and watch that terminal. Health, Prometheus metrics, and a compact debug description are also available at `/api/health`, `/api/metrics`, and `/api/debug`.
+
+`localhost:4318` is an OTLP ingestion receiver, not a browser UI. Use Grafana at `http://localhost:3001` to inspect its telemetry.
+
+If a run reports `Supabase workspace setup failed`, open the Supabase SQL editor and apply [the initial migration](../supabase/migrations/202609270001_initial.sql). The reference ID in the error can be supplied to Supabase support if it persists.

@@ -6,6 +6,7 @@ import { DEMO_RUN } from "@/lib/demo";
 import { DEFAULT_SOURCES } from "@/lib/sources";
 import { getAdminClient } from "@/lib/supabase/admin";
 import { exportSpan, logEvent, newSpanId, newTraceId } from "@/lib/telemetry";
+import { beginRun, finishRun, isCancelled } from "@/lib/run-control";
 import type { BriefingRun, MissionEvent } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -36,15 +37,18 @@ export async function GET() {
   } satisfies BriefingRun);
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   const startedAt = Date.now();
   const traceId = newTraceId();
-  const runId = randomUUID();
+  const requestedRunId = request.headers.get("x-mission-run-id");
+  const runId = requestedRunId && /^[a-zA-Z0-9-]{8,64}$/.test(requestedRunId) ? requestedRunId : randomUUID();
   const rootSpanId = newSpanId();
+  const controller = beginRun(runId);
+  const signal = controller.signal;
   const events: MissionEvent[] = [];
   const push = (kind: MissionEvent["kind"], actor: string, target: string, message: string, extra: Partial<MissionEvent> = {}) => events.push({ id: randomUUID(), runId, traceId, kind, actor, target, message, createdAt: new Date().toISOString(), ...extra });
   const admin = getAdminClient();
-  const parser = new Parser({ timeout: 10000, headers: { "User-Agent": "AgentMissionControl/0.1 (+local development)" } });
+  const parser = new Parser({ timeout: 6000, headers: { "User-Agent": "AgentMissionControl/0.1 (+local development)" } });
 
   try {
     let workspaceId: string | null = null;
@@ -52,17 +56,22 @@ export async function POST() {
       const { data: existing } = await admin.from("workspaces").select("id").eq("slug", "ai-data-briefing").maybeSingle();
       workspaceId = existing?.id ?? null;
       if (!workspaceId) {
-        const { data } = await admin.from("workspaces").insert({ name: "AI & Data Briefing", slug: "ai-data-briefing" }).select("id").single();
+        const { data, error } = await admin.from("workspaces").insert({ name: "AI & Data Briefing", slug: "ai-data-briefing" }).select("id").single();
+        if (error) throw new Error(`Supabase workspace setup failed: ${error.message}`);
         workspaceId = data?.id ?? null;
       }
+      if (!workspaceId) throw new Error("Supabase did not return a workspace ID. Apply the project migration before running missions.");
       if (workspaceId) {
-        await admin.from("sources").upsert(DEFAULT_SOURCES.map((s) => ({ workspace_id: workspaceId, name: s.name, url: s.url, feed_url: s.feedUrl })), { onConflict: "workspace_id,feed_url" });
-        await admin.from("mission_runs").insert({ id: runId, workspace_id: workspaceId, trace_id: traceId, status: "running" });
+        const { error: sourceError } = await admin.from("sources").upsert(DEFAULT_SOURCES.map((s) => ({ workspace_id: workspaceId, name: s.name, url: s.url, feed_url: s.feedUrl })), { onConflict: "workspace_id,feed_url" });
+        if (sourceError) throw new Error(`Supabase source setup failed: ${sourceError.message}`);
+        const { error: runError } = await admin.from("mission_runs").insert({ id: runId, workspace_id: workspaceId, trace_id: traceId, status: "running" });
+        if (runError) throw new Error(`Supabase run creation failed: ${runError.message}`);
       }
     }
 
     const ingestStart = Date.now();
     const settled = await Promise.allSettled(DEFAULT_SOURCES.map(async (source) => ({ source, feed: await parser.parseURL(source.feedUrl) })));
+    if (isCancelled(signal)) throw new DOMException("Mission cancelled", "AbortError");
     const candidates: Array<FeedItem & { sourceName: string }> = [];
     settled.forEach((result, i) => {
       if (result.status === "fulfilled") {
@@ -95,8 +104,9 @@ export async function POST() {
       await admin.from("articles").upsert(fresh.map((item) => ({ workspace_id: workspaceId, source_id: sources?.find((s) => s.name === item.sourceName)?.id, canonical_url: item.canonicalUrl, title: item.title!, author: item.creator ?? item.author, published_at: item.pubDate ? new Date(item.pubDate).toISOString() : null, excerpt: (item.contentSnippet ?? "").slice(0, 600), content_hash: item.hash, normalized_title: normalize(item.title!) })), { onConflict: "workspace_id,canonical_url", ignoreDuplicates: true });
     }
 
-    const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
-    const model = process.env.OPENAI_MODEL ?? "gpt-6-luna";
+    const requestedModel = request.headers.get("x-llm-model")?.trim();
+    const model = requestedModel && /^[a-zA-Z0-9._:-]{2,128}$/.test(requestedModel) ? requestedModel : process.env.OPENAI_MODEL ?? "gpt-6-luna";
+    const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY, baseURL: process.env.OPENAI_BASE_URL || undefined }) : null;
     let markdown = "";
     let inputTokens = 0;
     let outputTokens = 0;
@@ -107,13 +117,14 @@ export async function POST() {
       const memory = admin && workspaceId ? (await admin.from("editorial_memory").select("preferences").eq("workspace_id", workspaceId).maybeSingle()).data?.preferences : null;
       const sourceText = fresh.map((item, index) => `[${index + 1}] ${item.title}\nSource: ${item.sourceName}\nURL: ${item.canonicalUrl}\nExcerpt: ${(item.contentSnippet ?? "").slice(0, 800)}`).join("\n\n");
       const curateStart = Date.now();
-      const curated = await openai.responses.create({ model, max_output_tokens: 700, input: `You are the curator for a concise AI and data engineering blog. Select at most 3 distinct, high-value items from the sources. Avoid duplicate themes. Return a numbered list containing the exact source number, why it matters, and the source URL. Editorial memory: ${JSON.stringify(memory ?? {})}\n\n${sourceText}` });
+      const curated = await openai.responses.create({ model, max_output_tokens: 700, input: `You are the curator for a concise AI and data engineering blog. Select at most 3 distinct, high-value items from the sources. Avoid duplicate themes. Return a numbered list containing the exact source number, why it matters, and the source URL. Editorial memory: ${JSON.stringify(memory ?? {})}\n\n${sourceText}` }, { signal });
       inputTokens += curated.usage?.input_tokens ?? 0; outputTokens += curated.usage?.output_tokens ?? 0;
       push("agent.completed", "Curator", "Writer", `Selected ${selectedCount} distinct stories`, { durationMs: Date.now() - curateStart, tokens: (curated.usage?.input_tokens ?? 0) + (curated.usage?.output_tokens ?? 0) });
       await exportSpan({ traceId, parentSpanId: rootSpanId, name: "llm.curate", startedAt: curateStart, attributes: { model, input_tokens: curated.usage?.input_tokens ?? 0, output_tokens: curated.usage?.output_tokens ?? 0 } });
 
       const writeStart = Date.now();
-      const written = await openai.responses.create({ model, max_output_tokens: 900, input: `Write a 300-500 word Markdown blog briefing for technical readers about AI and data engineering. Use only the curated notes below. Include a specific title, short opening synthesis, 2-3 headed sections, a closing takeaway, and inline Markdown source links. Do not invent claims.\n\n${curated.output_text}` });
+      if (isCancelled(signal)) throw new DOMException("Mission cancelled", "AbortError");
+      const written = await openai.responses.create({ model, max_output_tokens: 900, input: `Write a 300-500 word Markdown blog briefing for technical readers about AI and data engineering. Use only the curated notes below. Include a specific title, short opening synthesis, 2-3 headed sections, a closing takeaway, and inline Markdown source links. Do not invent claims.\n\n${curated.output_text}` }, { signal });
       markdown = written.output_text;
       inputTokens += written.usage?.input_tokens ?? 0; outputTokens += written.usage?.output_tokens ?? 0;
       push("draft.created", "Writer", "Reviewer", "Blog briefing ready for review", { durationMs: Date.now() - writeStart, tokens: (written.usage?.input_tokens ?? 0) + (written.usage?.output_tokens ?? 0) });
@@ -137,9 +148,12 @@ export async function POST() {
     const estimatedCostUsd = inputTokens * 0.00000005 + outputTokens * 0.00000025;
 
     if (admin && workspaceId) {
-      await admin.from("mission_runs").update({ status: "review", quality_score: qualityScore, input_tokens: inputTokens, output_tokens: outputTokens, estimated_cost_usd: estimatedCostUsd, completed_at: new Date().toISOString() }).eq("id", runId);
-      await admin.from("mission_events").insert(events.map((e) => ({ id: e.id, workspace_id: workspaceId, run_id: runId, trace_id: traceId, kind: e.kind, actor: e.actor, target: e.target, message: e.message, duration_ms: e.durationMs, tokens: e.tokens, created_at: e.createdAt })));
-      await admin.from("briefings").insert({ workspace_id: workspaceId, run_id: runId, title: "AI & data engineering briefing", markdown });
+      const { error: updateError } = await admin.from("mission_runs").update({ status: "review", quality_score: qualityScore, input_tokens: inputTokens, output_tokens: outputTokens, estimated_cost_usd: estimatedCostUsd, completed_at: new Date().toISOString() }).eq("id", runId);
+      if (updateError) throw new Error(`Supabase run update failed: ${updateError.message}`);
+      const { error: eventError } = await admin.from("mission_events").insert(events.map((e) => ({ id: e.id, workspace_id: workspaceId, run_id: runId, trace_id: traceId, kind: e.kind, actor: e.actor, target: e.target, message: e.message, duration_ms: e.durationMs, tokens: e.tokens, created_at: e.createdAt })));
+      if (eventError) throw new Error(`Supabase event persistence failed: ${eventError.message}`);
+      const { error: briefingError } = await admin.from("briefings").insert({ workspace_id: workspaceId, run_id: runId, title: "AI & data engineering briefing", markdown });
+      if (briefingError) throw new Error(`Supabase briefing persistence failed: ${briefingError.message}`);
     }
 
     await exportSpan({ traceId, spanId: rootSpanId, name: "mission.run", startedAt, attributes: { run_id: runId, new_articles: fresh.length, duplicates, quality_score: qualityScore, input_tokens: inputTokens, output_tokens: outputTokens, model } });
@@ -147,9 +161,11 @@ export async function POST() {
     return NextResponse.json({ id: runId, traceId, status: "review", startedAt: new Date(startedAt).toISOString(), completedAt: new Date().toISOString(), newArticles: fresh.length, duplicates, selected: selectedCount, qualityScore, inputTokens, outputTokens, estimatedCostUsd, title: "AI & data engineering briefing", markdown, events } satisfies BriefingRun);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown mission failure";
-    logEvent("error", "mission.failed", { run_id: runId, trace_id: traceId, message });
+    const cancelled = error instanceof DOMException && error.name === "AbortError";
+    logEvent(cancelled ? "info" : "error", cancelled ? "mission.cancelled" : "mission.failed", { run_id: runId, trace_id: traceId, message, stack: error instanceof Error ? error.stack : undefined });
     await exportSpan({ traceId, spanId: rootSpanId, name: "mission.run", startedAt, status: "error", attributes: { run_id: runId, error: message } });
-    return NextResponse.json({ error: message, traceId }, { status: 500 });
+    return NextResponse.json({ error: message, traceId, runId, cancelled }, { status: cancelled ? 499 : 500 });
+  } finally {
+    finishRun(runId);
   }
 }
-
