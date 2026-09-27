@@ -56,4 +56,5 @@ export interface RunHistoryItem {
   markdown: string;
   feedbackVerdict?: string;
   feedbackRating?: number;
+  events?: MissionEvent[];
 }

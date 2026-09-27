@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { selectRows } from "@/lib/supabase/rest";
-import type { RunHistoryItem } from "@/lib/types";
+import type { MissionEvent, RunHistoryItem } from "@/lib/types";
 
 type Run = { id: string; trace_id: string; status: RunHistoryItem["status"]; started_at: string; completed_at?: string; quality_score?: number; input_tokens: number; output_tokens: number; estimated_cost_usd: number };
 type Briefing = { id: string; run_id: string; title: string; markdown: string };
 type Feedback = { briefing_id: string; verdict: string; rating?: number };
+type Event = { id: string; run_id: string; trace_id: string; kind: string; actor: string; target: string; message: string; created_at: string; duration_ms?: number; tokens?: number };
 
 export async function GET() {
   try {
@@ -12,6 +13,7 @@ export async function GET() {
     if (!runs.length) return NextResponse.json([]);
     const briefings = await selectRows<Briefing[]>("briefings", `select=id,run_id,title,markdown&run_id=in.(${runs.map((run) => run.id).join(",")})`);
     const feedback = briefings.length ? await selectRows<Feedback[]>("feedback", `select=briefing_id,verdict,rating&briefing_id=in.(${briefings.map((briefing) => briefing.id).join(",")})&order=created_at.desc`) : [];
-    return NextResponse.json(runs.map((run) => { const briefing = briefings.find((item) => item.run_id === run.id); const review = feedback.find((item) => item.briefing_id === briefing?.id); return { id: run.id, traceId: run.trace_id, status: run.status, startedAt: run.started_at, completedAt: run.completed_at, qualityScore: run.quality_score ?? 0, inputTokens: run.input_tokens, outputTokens: run.output_tokens, estimatedCostUsd: Number(run.estimated_cost_usd), title: briefing?.title ?? "Briefing", markdown: briefing?.markdown ?? "", feedbackVerdict: review?.verdict, feedbackRating: review?.rating }; }) satisfies RunHistoryItem[]);
+    const events = await selectRows<Event[]>("mission_events", `select=*&run_id=in.(${runs.map((run) => run.id).join(",")})&order=created_at.asc`);
+    return NextResponse.json(runs.map((run) => { const briefing = briefings.find((item) => item.run_id === run.id); const review = feedback.find((item) => item.briefing_id === briefing?.id); return { id: run.id, traceId: run.trace_id, status: run.status, startedAt: run.started_at, completedAt: run.completed_at, qualityScore: run.quality_score ?? 0, inputTokens: run.input_tokens, outputTokens: run.output_tokens, estimatedCostUsd: Number(run.estimated_cost_usd), title: briefing?.title ?? "Briefing", markdown: briefing?.markdown ?? "", feedbackVerdict: review?.verdict, feedbackRating: review?.rating, events: events.filter((event) => event.run_id === run.id).map((event) => ({ id: event.id, runId: event.run_id, traceId: event.trace_id, kind: event.kind as MissionEvent["kind"], actor: event.actor, target: event.target, message: event.message, createdAt: event.created_at, durationMs: event.duration_ms, tokens: event.tokens })) }; }) satisfies RunHistoryItem[]);
   } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Supabase history failed" }, { status: 500 }); }
 }
