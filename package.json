@@ -6,6 +6,7 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "bootstrap:users": "node --env-file=.env.local scripts/bootstrap-users.mjs",
     "install:ci": "node scripts/install-ci.mjs",
     "dev": "node scripts/run-framework.mjs dev",
     "dev:node": "next dev -p 5173",
