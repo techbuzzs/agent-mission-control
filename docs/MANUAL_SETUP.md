@@ -96,4 +96,20 @@ Then run a briefing and watch that terminal. Health, Prometheus metrics, and a c
 
 `localhost:4318` is an OTLP ingestion receiver, not a browser UI. Use Grafana at `http://localhost:3001` to inspect its telemetry.
 
+## Notion publishing
+
+1. Create a parent page in Notion for Mission Control briefings.
+2. Open the page menu, choose **Connections**, and add the Mission Control integration.
+3. Copy the page ID from the Notion URL and add these server-only values to `.env.local`:
+
+```env
+NOTION_API_KEY=secret_replace_me
+NOTION_PARENT_PAGE_ID=replace-with-parent-page-id
+```
+
+4. Run `supabase/migrations/202609280002_notion_publications.sql` in the Supabase SQL editor.
+5. Restart `npm run dev`.
+
+The review panel can now create a Notion draft or final page. Both operations store the resulting Notion URL and status in `notion_publications`; no credential is sent to the browser.
+
 If a run reports `Supabase workspace setup failed`, open the Supabase SQL editor and apply [the initial migration](../supabase/migrations/202609270001_initial.sql). The reference ID in the error can be supplied to Supabase support if it persists.

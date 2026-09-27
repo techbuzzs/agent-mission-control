@@ -55,6 +55,8 @@ export async function exportSpan(input: SpanInput) {
 }
 
 export function logEvent(level: "info" | "error", event: string, fields: Record<string, unknown>) {
-  console[level](JSON.stringify({ timestamp: new Date().toISOString(), level, event, service: "agent-mission-control", ...fields }));
+  const entry = { timestamp: new Date().toISOString(), level, event, service: "agent-mission-control", ...fields };
+  console[level](JSON.stringify(entry));
+  const loki = process.env.LOKI_PUSH_URL ?? (process.env.VERCEL ? undefined : "http://localhost:3100/loki/api/v1/push");
+  if (loki) void fetch(loki, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ streams: [{ stream: { service_name: "agent-mission-control", level, event }, values: [[`${Date.now()}000000`, JSON.stringify(entry)]] }] }) }).catch(() => undefined);
 }
-
